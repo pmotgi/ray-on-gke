@@ -1,0 +1,28 @@
+# Serving image: Ray + vLLM for OpenAI-compatible inference.
+# Use the official vLLM image as a base and install Ray on top — guarantees
+# the latest CUDA/Blackwell kernels for RTX PRO 6000 SM120.
+
+FROM vllm/vllm-openai:v0.11.0
+
+# vllm-openai sets ENTRYPOINT to vllm; we want a generic shell so Ray Serve
+# can take over.
+ENTRYPOINT []
+WORKDIR /workspace
+
+# Install Ray + Serve. vLLM image already has torch/CUDA, so this just adds Ray.
+#RUN pip install --no-cache-dir vllm
+
+RUN pip install --no-cache-dir \
+        "ray[serve]==2.47.0" \
+#       "ray[llm]" \
+        "pyarrow" \
+        "pandas" \
+        "google-cloud-storage" \
+        "fastapi" \
+        "httpx"
+
+COPY serve/serve_app.py /workspace/serve_app.py
+
+# Default to the Ray Serve startup so the RayService manifest can override it
+# with `serveConfigV2`.
+CMD ["bash"]

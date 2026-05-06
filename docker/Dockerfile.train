@@ -1,0 +1,32 @@
+# Training image: Ray + PyTorch + transformers + PEFT for LoRA fine-tuning.
+# Built on rayproject/ray-ml so PyTorch + CUDA come pre-baked.
+#
+# Note: Ray's official ML images target stable CUDA wheels. The RTX PRO 6000
+# (Blackwell SM120) requires CUDA 12.8+ wheels; ray-ml:2.40+ ships with this.
+
+FROM rayproject/ray-llm:nightly-extra-py311-cu128
+
+USER root
+
+# Workspace dirs the script expects
+RUN mkdir -p /workspace /mnt/checkpoints && chown -R ray:users /workspace /mnt/checkpoints
+
+USER ray
+WORKDIR /workspace
+
+# Install training deps. We pin transformers >= 4.50 for full Gemma 3 support.
+# accelerate, peft, trl, datasets are the standard HF stack for LoRA SFT.
+RUN pip install --no-cache-dir \
+        "transformers>=4.50.0" \
+        "accelerate>=0.34.0" \
+        "peft>=0.13.0" \
+        "trl>=0.12.0" \
+        "datasets>=3.0.0" \
+        "bitsandbytes>=0.44.0" \
+        "sentencepiece" \
+        "google-cloud-storage" \
+        "tensorboard"
+
+COPY --chown=ray:users finetune/train.py /workspace/train.py
+
+CMD ["python", "/workspace/train.py"]

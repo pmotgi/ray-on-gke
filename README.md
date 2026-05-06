@@ -13,6 +13,10 @@ A production-style reference demo showing how to **fine-tune** and **serve** Goo
 | 5. Test | Smoke tests against `/v1/chat/completions` | `curl` + Python |
 | 6. Benchmark | Throughput / latency benchmarking | `vllm bench serve` |
 
+## Model training and serving pipeline
+![Diagram of the pipeline](pipeline.png)
+
+
 ## Hardware
 
 - **Machine type:** `g4-standard-48` — 1× NVIDIA RTX PRO 6000 Blackwell (96GB VRAM), 48 vCPUs, 180GB RAM
@@ -207,8 +211,12 @@ curl http://localhost:8000/v1/chat/completions \
 ### Step 8 — Benchmark
 
 ```bash
-bash benchmark/run-benchmark.sh
+bash k8s/apply.sh benchmark
+
+Check logs:
+kubectl logs -f vllm-benchmark -n ray-system
 ```
+![Benchmark command output](benchmark-screenshot.png)
 
 This applies the benchmark pod (which mounts the GCS bucket so it can pull the tokenizer), runs `vllm bench serve` against the in-cluster Ray Serve service, and writes JSON results to `gs://<BUCKET>/benchmark-results/`. You'll see throughput, TTFT, and inter-token latency percentiles in the streamed logs.
 
@@ -217,16 +225,6 @@ This applies the benchmark pod (which mounts the GCS bucket so it can pull the t
 ```bash
 bash infra/99-cleanup.sh
 ```
-
----
-
-## Customer talking points
-
-- **One platform for train + serve.** Same GKE cluster, same Ray runtime — no handoff between training and inference infra.
-- **GCS as shared filesystem.** GCSFuse means training writes a checkpoint directly to a bucket; serving reads it directly from the same bucket — no `gsutil cp` step in between.
-- **Right-sized autoscaling.** GPU node pool scales to **zero** when idle. The RayService scales replicas based on queue depth.
-- **Open standards.** OpenAI-compatible API surface from Ray Serve + vLLM means clients written for OpenAI work unchanged.
-- **Production-grade observability.** `--enable-ray-cluster-monitoring` ships Ray metrics straight to Cloud Monitoring; `--enable-ray-cluster-logging` ships logs to Cloud Logging.
 
 ---
 

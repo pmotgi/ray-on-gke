@@ -1,0 +1,182 @@
+# RayJob: distributed LoRA fine-tuning of Gemma 3 1B.
+#
+# Creates an ephemeral RayCluster (head + 1 GPU worker), submits the training
+# job, and tears the cluster down once the job succeeds.
+#
+# Before applying:
+#   * Replace ${PROJECT_ID}, ${REGION}, ${BUCKET_NAME} below (or use envsubst —
+#     see scripts/apply.sh as a pattern).
+#   * Make sure infra/03-setup-workload-identity.sh has been run.
+#   * Make sure infra/04-hf-secret.sh has been run.
+
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: gemma-finetune
+  namespace: ray-system
+spec:
+  entrypoint: python /workspace/train.py
+
+  # Tear down the ephemeral RayCluster after success, but keep RayJob CR so
+  # users can `kubectl describe rayjob gemma-finetune` for an audit trail.
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 600    # 10 min grace for log scraping
+  backoffLimit: 1
+
+  rayClusterSpec:
+    rayVersion: "2.40.0"
+
+    # ===== Head =====
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        num-gpus: "0"
+      template:
+        metadata:
+          annotations:
+            gke-gcsfuse/volumes: "true"
+            gke-gcsfuse/cpu-limit: "1"
+            gke-gcsfuse/memory-limit: "2Gi"
+            gke-gcsfuse/ephemeral-storage-limit: "10Gi"
+        spec:
+          serviceAccountName: ray-ksa
+          securityContext:
+            fsGroup: 1000
+            runAsUser: 1000
+            runAsGroup: 1000
+          
+          containers:
+            - name: ray-head
+              image: REGION-docker.pkg.dev/PROJECT_ID/ray-gke-demo/ray-train:latest
+              imagePullPolicy: Always
+              env:
+                - name: HUGGING_FACE_HUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hf-token
+                      key: HUGGING_FACE_HUB_TOKEN
+                - name: BASE_MODEL
+                  value: "google/gemma-3-1b-it"
+                - name: DATASET_NAME
+                  value: "databricks/databricks-dolly-15k"
+                - name: RUN_NAME
+                  value: "gemma-3-1b-dolly"
+                - name: NUM_WORKERS
+                  value: "1"
+                - name: NUM_EPOCHS
+                  value: "1"
+                - name: MAX_TRAIN_SAMPLES
+                  value: "2000"
+                - name: CHECKPOINT_ROOT
+                  value: "/mnt/checkpoints"
+                # Disable HF Transfer; with GCSFuse the bottleneck is the
+                # mount, not the download path.
+                - name: HF_HUB_ENABLE_HF_TRANSFER
+                  value: "0"
+              resources:
+                requests:
+                  cpu: "4"
+                  memory: "16Gi"
+                limits:
+                  cpu: "4"
+                  memory: "16Gi"
+              ports:
+                - containerPort: 6379
+                  name: gcs
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+              volumeMounts:
+                - name: checkpoints
+                  mountPath: /mnt/checkpoints
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: checkpoints
+              csi:
+                driver: gcsfuse.csi.storage.gke.io
+                volumeAttributes:
+                  bucketName: BUCKET_NAME
+                  # implicit-dirs lets the FUSE mount expose the GCS object
+                  # prefix layout as a real directory tree.
+                  mountOptions: "implicit-dirs"
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 8Gi
+
+    # ===== Workers (GPU) =====
+    workerGroupSpecs:
+      - groupName: gpu-worker
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 1
+        rayStartParams:
+          num-gpus: "1"
+        template:
+          metadata:
+            annotations:
+              gke-gcsfuse/volumes: "true"
+              gke-gcsfuse/cpu-limit: "2"
+              gke-gcsfuse/memory-limit: "4Gi"
+              gke-gcsfuse/ephemeral-storage-limit: "20Gi"
+          spec:
+            serviceAccountName: ray-ksa
+            securityContext:
+              fsGroup: 1000
+              runAsUser: 1000
+              runAsGroup: 1000
+            nodeSelector:
+              cloud.google.com/gke-accelerator: nvidia-rtx-pro-6000
+              ray-gke-demo/provisioning: TRAIN_PROVISIONING_MODE
+            tolerations:
+              - key: nvidia.com/gpu
+                operator: Equal
+                value: present
+                effect: NoSchedule
+              # Spot tolerations — harmless on non-spot pools (the taint
+              # simply won't be present), so we leave them in unconditionally.
+              - key: cloud.google.com/gke-spot
+                operator: Equal
+                value: "true"
+                effect: NoSchedule
+            containers:
+              - name: ray-worker
+                image: REGION-docker.pkg.dev/PROJECT_ID/ray-gke-demo/ray-train:latest
+                imagePullPolicy: Always
+                env:
+                  - name: HUGGING_FACE_HUB_TOKEN
+                    valueFrom:
+                      secretKeyRef:
+                        name: hf-token
+                        key: HUGGING_FACE_HUB_TOKEN
+                  - name: HF_HUB_ENABLE_HF_TRANSFER
+                    value: "0"
+                  - name: PYTORCH_CUDA_ALLOC_CONF
+                    value: "expandable_segments:True"
+                resources:
+                  requests:
+                    cpu: "16"
+                    memory: "64Gi"
+                    nvidia.com/gpu: "1"
+                  limits:
+                    cpu: "32"
+                    memory: "120Gi"
+                    nvidia.com/gpu: "1"
+                volumeMounts:
+                  - name: checkpoints
+                    mountPath: /mnt/checkpoints
+                  - name: dshm
+                    mountPath: /dev/shm
+            volumes:
+              - name: checkpoints
+                csi:
+                  driver: gcsfuse.csi.storage.gke.io
+                  volumeAttributes:
+                    bucketName: BUCKET_NAME
+                    mountOptions: "implicit-dirs"
+              - name: dshm
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: 32Gi

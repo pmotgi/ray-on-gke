@@ -1,0 +1,175 @@
+# RayService: Ray Serve + vLLM, exposing an OpenAI-compatible API.
+#
+# The serveConfigV2 string is parsed by the Ray Serve controller and used to
+# (re)deploy the application graph with zero downtime on update.
+#
+# The Ray head pod here doubles as the HTTP proxy (Ray Serve's HTTP server
+# runs on the head by default). We only need GPUs on the worker pool.
+
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: gemma-serve
+  namespace: ray-system
+spec:
+  serveConfigV2: |
+    applications:
+      - name: gemma
+        import_path: ray.serve.llm:build_openai_app
+        route_prefix: /
+        args:
+          llm_configs:
+            - model_loading_config:
+                model_id: "gemma-3-1b-dolly"
+                model_source: "/mnt/checkpoints/gemma-3-1b-dolly/merged"
+              engine_kwargs:
+                dtype: bfloat16
+                max_model_len: 8192
+                gpu_memory_utilization: 0.75
+              deployment_config:
+                autoscaling_config:
+                  min_replicas: 1
+                  max_replicas: 4
+                  target_ongoing_requests: 64
+                max_ongoing_requests: 128
+
+  rayClusterConfig:
+    rayVersion: "2.52.0"
+
+    # ===== Head =====
+    headGroupSpec:
+      rayStartParams:   
+        num-cpus: "0"
+        num-gpus: "0"
+      template:
+        metadata:
+          annotations:
+            gke-gcsfuse/volumes: "true"
+            gke-gcsfuse/cpu-limit: "1"
+            gke-gcsfuse/memory-limit: "2Gi"
+        spec:
+          serviceAccountName: ray-ksa
+          securityContext:
+            fsGroup: 1000
+            runAsUser: 1000
+            runAsGroup: 1000
+          containers:
+            - name: ray-head
+              image: rayproject/ray-llm:2.52.0-py311-cu128
+              imagePullPolicy: Always
+              env:
+                # Ray Serve picks up serve_app from this dir
+                - name: PYTHONPATH
+                  value: "/workspace"
+                - name: HUGGING_FACE_HUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hf-token
+                      key: HUGGING_FACE_HUB_TOKEN
+              resources:
+                requests:
+                  cpu: "4"
+                  memory: "16Gi"
+                limits:
+                  cpu: "4"
+                  memory: "16Gi"
+              ports:
+                - containerPort: 6379
+                  name: gcs
+                - containerPort: 8265
+                  name: dashboard
+                - containerPort: 10001
+                  name: client
+                - containerPort: 8000
+                  name: serve
+                - containerPort: 8080
+                  name: metrics
+              volumeMounts:
+                - name: checkpoints
+                  mountPath: /mnt/checkpoints
+                  readOnly: false
+          volumes:
+            - name: checkpoints
+              csi:
+                driver: gcsfuse.csi.storage.gke.io
+                readOnly: false
+                volumeAttributes:
+                  bucketName: BUCKET_NAME
+                  # File-cache + parallel download dramatically speed up
+                  # initial model load from GCS — see GKE GCSFuse perf docs.
+                  mountOptions: "implicit-dirs,rw"
+
+    # ===== Workers (GPU) =====
+    workerGroupSpecs:
+      - groupName: gpu-worker
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 1
+        rayStartParams:
+          num-gpus: "1"
+        template:
+          metadata:
+            annotations:
+              gke-gcsfuse/volumes: "true"
+              gke-gcsfuse/cpu-limit: "2"
+              gke-gcsfuse/memory-limit: "4Gi"
+              gke-gcsfuse/ephemeral-storage-limit: "20Gi"
+          spec:
+            serviceAccountName: ray-ksa
+            securityContext:
+              fsGroup: 1000
+              runAsUser: 1000
+              runAsGroup: 1000
+            nodeSelector:
+              cloud.google.com/gke-accelerator: nvidia-rtx-pro-6000
+              ray-gke-demo/provisioning: SERVE_PROVISIONING_MODE
+            tolerations:
+              - key: nvidia.com/gpu
+                operator: Equal
+                value: present
+                effect: NoSchedule
+              - key: cloud.google.com/gke-spot
+                operator: Equal
+                value: "true"
+                effect: NoSchedule
+            containers:
+              - name: ray-worker
+                image: rayproject/ray-llm:2.52.0-py311-cu128
+                imagePullPolicy: Always
+                env:
+                  - name: PYTHONPATH
+                    value: "/workspace"
+                  - name: HUGGING_FACE_HUB_TOKEN
+                    valueFrom:
+                      secretKeyRef:
+                        name: hf-token
+                        key: HUGGING_FACE_HUB_TOKEN
+                  - name: VLLM_WORKER_MULTIPROC_METHOD
+                    value: "spawn"
+                resources:
+                  requests:
+                    cpu: "32"
+                    memory: "64Gi"
+                    nvidia.com/gpu: "1"
+                  limits:
+                    cpu: "32"
+                    memory: "120Gi"
+                    nvidia.com/gpu: "1"
+                volumeMounts:
+                  - name: checkpoints
+                    mountPath: /mnt/checkpoints
+                    readOnly: false
+                  - name: dshm
+                    mountPath: /dev/shm
+            volumes:
+              - name: checkpoints
+                csi:
+                  driver: gcsfuse.csi.storage.gke.io
+                  readOnly: false
+                  volumeAttributes:
+                    bucketName: BUCKET_NAME
+                    mountOptions: "rw,implicit-dirs"
+              - name: dshm
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: 32Gi

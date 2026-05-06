@@ -1,0 +1,77 @@
+# Benchmark pod: runs `vllm bench serve` against the Ray Serve endpoint.
+#
+# We hit the in-cluster service `gemma-serve-serve-svc` on port 8000 — that
+# service is auto-created by the RayService controller.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-benchmark
+  namespace: ray-system
+  annotations:
+    gke-gcsfuse/volumes: "true"
+spec:
+  serviceAccountName: ray-ksa
+  restartPolicy: Never
+  containers:
+    - name: bench
+      image: vllm/vllm-openai:latest
+      imagePullPolicy: Always
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+
+          ENDPOINT="http://gemma-serve-serve-svc.ray-system.svc.cluster.local:8000"
+          echo "==> Waiting for ${ENDPOINT}/health"
+          for i in $(seq 1 60); do
+            if curl -fs "${ENDPOINT}/health" >/dev/null 2>&1; then
+              echo "    ready"; break
+            fi
+            sleep 5
+          done
+
+          # Download a small ShareGPT-style dataset for the benchmark
+          echo "==> Fetching benchmark prompts"
+          mkdir -p /tmp/bench && cd /tmp/bench
+          curl -L -o sharegpt.json \
+            https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split_no_imsorry.json
+
+          echo "==> Running vllm bench serve"
+          vllm bench serve \
+            --backend openai-chat \
+            --model gemma-3-1b-dolly \
+            --tokenizer /mnt/checkpoints/gemma-3-1b-dolly/merged \
+            --endpoint /v1/chat/completions \
+            --base-url "${ENDPOINT}" \
+            --dataset-name sharegpt \
+            --dataset-path /tmp/bench/sharegpt.json \
+            --num-prompts 200 \
+            --request-rate 5 \
+            --save-result \
+            --result-dir /mnt/checkpoints/benchmark-results
+
+          echo "==> Benchmark finished. Results saved to gs://BUCKET_NAME/benchmark-results/"
+      volumeMounts:
+        - name: checkpoints
+          mountPath: /mnt/checkpoints
+        - name: dshm
+          mountPath: /dev/shm
+      resources:
+        requests:
+          cpu: "4"
+          memory: "8Gi"
+        limits:
+          cpu: "8"
+          memory: "16Gi"
+  volumes:
+    - name: checkpoints
+      csi:
+        driver: gcsfuse.csi.storage.gke.io
+        volumeAttributes:
+          bucketName: "northam-ce-mlai-tpu-ray-gke-demo"
+          mountOptions: "implicit-dirs"
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 4Gi
