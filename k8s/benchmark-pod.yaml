@@ -69,7 +69,7 @@ spec:
       csi:
         driver: gcsfuse.csi.storage.gke.io
         volumeAttributes:
-          bucketName: "northam-ce-mlai-tpu-ray-gke-demo"
+          bucketName: BUCKET_NAME
           mountOptions: "implicit-dirs"
     - name: dshm
       emptyDir:

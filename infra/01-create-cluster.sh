@@ -27,6 +27,8 @@ gcloud container clusters create "${CLUSTER_NAME}" \
   --enable-autoscaling --min-nodes=1 --max-nodes=3 \
   --enable-ip-alias \
   --logging=SYSTEM,WORKLOAD \
+  --cluster-ipv4-cidr=10.100.0.0/16 \
+  --services-ipv4-cidr=10.101.0.0/20 \
   --monitoring=SYSTEM
 
 echo "==> Adding Artifact Registry repo"

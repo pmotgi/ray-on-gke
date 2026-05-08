@@ -47,7 +47,7 @@ spec:
           
           containers:
             - name: ray-head
-              image: REGION-docker.pkg.dev/PROJECT_ID/ray-gke-demo/ray-train:latest
+              image: REGION-docker.pkg.dev/PROJECT_ID/ray-gke-demo-flex/ray-train:latest
               imagePullPolicy: Always
               env:
                 - name: HUGGING_FACE_HUB_TOKEN
@@ -143,7 +143,7 @@ spec:
                 effect: NoSchedule
             containers:
               - name: ray-worker
-                image: REGION-docker.pkg.dev/PROJECT_ID/ray-gke-demo/ray-train:latest
+                image: REGION-docker.pkg.dev/PROJECT_ID/ray-gke-demo-flex/ray-train:latest
                 imagePullPolicy: Always
                 env:
                   - name: HUGGING_FACE_HUB_TOKEN

@@ -164,9 +164,15 @@ kubectl get rayjob gemma-finetune -n ray-system -w
 kubectl logs -n ray-system -l job-name=gemma-finetune -f
 
 # Ray dashboard (in another terminal)
-kubectl port-forward -n ray-system svc/gemma-finetune-raycluster-head-svc 8265:8265
+kubectl port-forward -n ray-system svc/gemma-finetune-head-svc 8265:8265
 # then open http://localhost:8265
 ```
+
+You can see finetuning job running on Ray Dashboard:
+![train job on Ray dashboard](train-screenshot.png)
+
+You can also observe Training actors:
+![train actors](train-actors.png)
 
 When the job completes, the merged checkpoint will be at `gs://<BUCKET>/checkpoints/gemma-3-1b-dolly-merged/`.
 
@@ -188,7 +194,18 @@ Once the status shows `Running`, get the endpoint:
 kubectl get svc -n ray-system | grep serve
 # port-forward for testing
 kubectl port-forward -n ray-system svc/gemma-serve-serve-svc 8000:8000
+
+#Open Ray Dashboard:
+kubectl port-forward -n ray-system svc/gemma-serve-head-svc 8265:8265
+
 ```
+
+You can also verify serving jobs on Ray dashboard:
+![serve job on Ray dashboard](infrerence-screenshot.png)
+
+Then you can verify GRAM utilization on dashboard Cluster section
+![train job on Ray dashboard](inference-gram-ss.png)
+
 
 ### Step 7 — Smoke-test the endpoint
 
@@ -217,6 +234,10 @@ Check logs:
 kubectl logs -f vllm-benchmark -n ray-system
 ```
 ![Benchmark command output](benchmark-screenshot.png)
+
+While running the benchmark you can observe the GPU utilization and GRAM Utilization
+![benchmark metrics Ray dashboard](vllm-bench.png)
+
 
 This applies the benchmark pod (which mounts the GCS bucket so it can pull the tokenizer), runs `vllm bench serve` against the in-cluster Ray Serve service, and writes JSON results to `gs://<BUCKET>/benchmark-results/`. You'll see throughput, TTFT, and inter-token latency percentiles in the streamed logs.
 

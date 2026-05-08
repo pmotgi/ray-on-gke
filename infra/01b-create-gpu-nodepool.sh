@@ -80,7 +80,7 @@ case "${MODE}" in
     MODE_FLAGS=(
       --flex-start
       --num-nodes=0
-      --enable-autoscaling --min-nodes=0 --total-max-nodes=4
+      --enable-autoscaling --min-nodes=0 --max-nodes=4
       --location-policy=ANY
       --reservation-affinity=none
       --no-enable-autorepair

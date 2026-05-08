@@ -8,7 +8,7 @@ export REGION="us-central1"
 export ZONE="us-central1-b"   # G4 / RTX PRO 6000 must be available here
 # ==================
 
-export CLUSTER_NAME="ray-gke-demo"
+export CLUSTER_NAME="ray-gke-demo-flex"
 export GKE_VERSION="1.35.3-gke.1234000"   # Min version for G4 + node-auto-provisioning
 
 # GPU node pool config
@@ -27,12 +27,12 @@ export GPU_COUNT_PER_NODE=1               # g4-standard-48 has 1× RTX PRO 6000
 #                up to 7 days. NOT preempted mid-run. Best for "I don't care
 #                when it starts but I need it to finish." Consumes preemptible
 #                quota. Requires GKE 1.33.0-gke.1712000+ for GPUs.
-export GPU_PROVISIONING_MODE="spot"
+export GPU_PROVISIONING_MODE="${GPU_PROVISIONING_MODE:-on-demand}"
 export GPU_POOL_NAME="gpu-pool-${GPU_PROVISIONING_MODE}"
 
 # Storage
-export BUCKET_NAME="${PROJECT_ID}-ray-gke-demo"
-export ARTIFACT_REGISTRY="ray-gke-demo"
+export BUCKET_NAME="${PROJECT_ID}-${CLUSTER_NAME}"
+export ARTIFACT_REGISTRY="${CLUSTER_NAME}" #change this for your project
 export AR_REPO="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY}"
 
 # Workload Identity
